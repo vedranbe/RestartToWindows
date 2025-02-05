@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: RestartToWindows@vedranbe.github.com\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2024-01-01 12:00+0000\n"
+"PO-Revision-Date: 2024-01-01 12:00+0000\n"
+"Last-Translator: \n"
+"Language-Team: Turkish\n"
+"Language: tr\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Restart to Windows"
+msgstr "Windows'a Yeniden Başlat"
+
+msgid "Restart the computer to Windows"
+msgstr "Bilgisayarı Windows'ta yeniden başlat"
+
+msgid "Success"
+msgstr "Başarılı"
+
+msgid "Failed"
+msgstr "Başarısız"
+
+msgid "Error"
+msgstr "Hata"
+
+msgid "Cancel"
+msgstr "İptal"
+
+msgid "Restart"
+msgstr "Yeniden Başlat"
+
+msgid "The system will restart to Windows in %d seconds."
+msgstr "Sistem %d saniye içinde Windows'a yeniden başlatılacak."
+
+msgid "Restarting..."
+msgstr "Yeniden başlatılıyor..."

@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: RestartToWindows@vedranbe.github.com\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2024-02-05 01:55+0100\n"
+"PO-Revision-Date: 2024-02-05 01:55+0100\n"
+"Last-Translator: Vedran Božić\n"
+"Language-Team: French\n"
+"Language: fr\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Restart to Windows"
+msgstr "Redémarrer sous Windows"
+
+msgid "Restart the computer to Windows"
+msgstr "Redémarrer l'ordinateur sous Windows"
+
+msgid "Success"
+msgstr "Succès"
+
+msgid "Failed"
+msgstr "Échec"
+
+msgid "Cancel"
+msgstr "Annuler"
+
+msgid "Restart"
+msgstr "Redémarrer"
+
+msgid "Error"
+msgstr "Erreur"
+
+msgid "Restarting..."
+msgstr "Redémarrage en cours..."
+
+msgid "The system will restart to Windows in %d seconds."
+msgstr "Le système redémarrera sous Windows dans %d secondes."

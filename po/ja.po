@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: RestartToWindows@vedranbe.github.com\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2024-01-01 12:00+0000\n"
+"PO-Revision-Date: 2024-01-01 12:00+0000\n"
+"Last-Translator: \n"
+"Language-Team: Japanese\n"
+"Language: ja\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Restart to Windows"
+msgstr "Windows で再起動"
+
+msgid "Restart the computer to Windows"
+msgstr "コンピュータをWindowsで再起動"
+
+msgid "Success"
+msgstr "成功"
+
+msgid "Failed"
+msgstr "失敗"
+
+msgid "Cancel"
+msgstr "キャンセル"
+
+msgid "Restart"
+msgstr "再起動"
+
+msgid "Error"
+msgstr "エラー"
+
+msgid "Restarting..."
+msgstr "再起動中..."
+
+msgid "The system will restart to Windows in %d seconds."
+msgstr "システムは %d 秒後に Windows で再起動します。"

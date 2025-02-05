@@ -1,0 +1,9 @@
+
+# Distribution folder
+dist/
+
+# Generated locale files
+src/locale/
+
+# Extension zip file
+RestartToWindows@vedranbe.github.com.zip
