@@ -28,10 +28,11 @@ import {
   gettext as _
 } from 'resource:///org/gnome/shell/extensions/extension.js'
 import { EFIBootManager } from './efibootmgr.js'
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 const ManagerInterface = `<node>
   <interface name="org.freedesktop.login1.Manager">
-    <method name="Restart">
+    <method name="Reboot">
       <arg type="b" direction="in"/>
     </method>
   </interface>
@@ -94,14 +95,24 @@ export default class RestartToWindowsExtension extends Extension {
       const success = await EFIBootManager.setNextBoot(entryNum)
       if (success) {
         console.log('Initiating reboot...')
-        this.proxy?.RestartRemote(false)
+        // Create new proxy for each reboot attempt
+        const proxy = new Gio.DBusProxy.new_for_bus_sync(
+          Gio.BusType.SYSTEM,
+          Gio.DBusProxyFlags.NONE,
+          null,
+          'org.freedesktop.login1',
+          '/org/freedesktop/login1',
+          'org.freedesktop.login1.Manager',
+          null
+        );
+
+        proxy.call_sync('Reboot', new GLib.Variant('(b)', [false]), 0, -1, null);
       } else {
         throw new Error('Failed to set next boot entry')
       }
     } catch (error) {
       console.error(`Error during reboot: ${error}`)
-      // Show error to user
-      Main.notify(_('Error'), _('Failed to restart to Windows'))
+      Main.notifyError(_('Error'), _('Failed to restart to Windows'))
     }
   }
 
@@ -154,7 +165,7 @@ export default class RestartToWindowsExtension extends Extension {
         action: () => {
           this._clearIntervals()
           dialog.close()
-          this._reboot()  // Changed from _Restart to _reboot
+          this._reboot()
         },
         default: false
       }
