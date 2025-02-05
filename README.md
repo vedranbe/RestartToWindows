@@ -16,7 +16,9 @@ A simple Linux application that allows you to restart your computer directly int
 
 ## Download
 You can clone the project from GitHub.
-`$ git clone https://github.com/vedranbe/RestartToWindows`
+```bash
+git clone https://github.com/vedranbe/RestartToWindows  # Git clone
+```
 
 ## Usage
 
