@@ -22,10 +22,9 @@ git clone https://github.com/vedranbe/RestartToWindows  # Git clone
 
 ## Usage
 
-1. Launch the application
-2. Click the "Restart to Windows" button
-3. Enter your sudo password when prompted
-4. Your system will restart and boot into Windows
+1. Click the "Restart to Windows.."
+2. Enter your sudo password when prompted
+3. Your system will restart and boot into Windows
 
 ## Building from Source
 

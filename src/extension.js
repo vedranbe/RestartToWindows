@@ -73,7 +73,7 @@ export default class RestartToWindowsExtension extends Extension {
           this.counter--
         } else {
           this._clearIntervals()
-          this._Restart()
+          this._reboot()  // Changed from _Restart to _reboot
         }
       }, 1000)
     })
@@ -81,20 +81,27 @@ export default class RestartToWindowsExtension extends Extension {
     this.menu.addMenuItem(this.RestartToWindowsItem, 2)
   }
 
-  async _Restart () {
+  async _reboot () {  // Changed from _Restart to _reboot
     try {
-      console.log('Starting Restart process...')
+      console.log('Starting reboot process...')
       const entryNum = await EFIBootManager.findWindowsBootManager()
       console.log(`Found Windows Boot Manager entry: ${entryNum}`)
 
+      if (!entryNum) {
+        throw new Error('Windows Boot Manager entry not found')
+      }
+
       const success = await EFIBootManager.setNextBoot(entryNum)
       if (success) {
+        console.log('Initiating reboot...')
         this.proxy?.RestartRemote(false)
       } else {
         throw new Error('Failed to set next boot entry')
       }
     } catch (error) {
-      console.error(`Error during Restart: ${error}`)
+      console.error(`Error during reboot: ${error}`)
+      // Show error to user
+      Main.notify(_('Error'), _('Failed to restart to Windows'))
     }
   }
 
@@ -147,7 +154,7 @@ export default class RestartToWindowsExtension extends Extension {
         action: () => {
           this._clearIntervals()
           dialog.close()
-          this._Restart()
+          this._reboot()  // Changed from _Restart to _reboot
         },
         default: false
       }
