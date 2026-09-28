@@ -1,268 +1,333 @@
 /* extension.js
-*
-* This program is free software: you can redistribute it and / or modify
-* it under the terms of the GNU General Public License as published by
-* the Free Software Foundation, either version 3 of the License, or
-* (at your option) any later version.
-* This program is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.See the
-* GNU General Public License for more details.
-* You should have received a copy of the GNU General Public License
-* along with this program.If not, see http://www.gnu.org/licenses/.
-* SPDX - License - Identifier: GPL - 3.0 - or - later
-*
-* /
-/* exported init */
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 
-import GLib from 'gi://GLib'
-import Gio from 'gi://Gio'
-import Clutter from 'gi://Clutter'
-import St from 'gi://St'
-import Pango from 'gi://Pango'
-import { panel } from 'resource:///org/gnome/shell/ui/main.js'
-import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js'
-import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js'
-import {
-  Extension,
-  gettext as _
-} from 'resource:///org/gnome/shell/extensions/extension.js'
-import { EFIBootManager } from './efibootmgr.js'
+import Clutter from 'gi://Clutter';
+import GLib from 'gi://GLib';
+import Pango from 'gi://Pango';
+import St from 'gi://St';
+
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import {
+    Extension,
+    gettext as _,
+} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const ManagerInterface = `<node>
-  <interface name="org.freedesktop.login1.Manager">
-    <method name="Reboot">
-      <arg type="b" direction="in"/>
-    </method>
-  </interface>
-</node>`
+import {
+    AuthenticationCancelledError,
+    EFIBootManager,
+} from './efibootmgr.js';
+import {Logind} from './logind.js';
+import {Log} from './utils.js';
 
-const Manager = Gio.DBusProxy.makeProxyWrapper(ManagerInterface)
+const COUNTDOWN_SECONDS = 60;
+
+/* How often to retry attaching the menu item while the panel is not up yet. */
+const ATTACH_RETRIES = 50;
 
 export default class RestartToWindowsExtension extends Extension {
-  menu
-  proxy
-  RestartToWindowsItem
-  /** @type {number} */
-  counter
-  /** @type {number} */
-  counterIntervalId
-  /** @type {number} */
-  messageIntervalId
-  sourceId
+    /** @type {import('../ui/popupMenu.js').PopupMenu|null} */
+    _menu = null;
+    /** @type {import('../ui/popupMenu.js').PopupBaseMenuItem|null} */
+    _menuItem = null;
+    /** @type {ModalDialog.ModalDialog|null} */
+    _dialog = null;
+    /** @type {St.Label|null} */
+    _countdownLabel = null;
+    /** @type {number} */
+    _countdown = 0;
+    _deadline = 0;
+    _countdownSourceId = 0;
+    _labelSourceId = 0;
+    _attachSourceId = 0;
+    _attachRetries = ATTACH_RETRIES;
+    _passwordlessHintShown = false;
+    /** @type {import('./efibootmgr.js').BootEntry|null} */
+    _entry = null;
 
-  _modifySystemItem () {
-    this.menu =
-      panel.statusArea.quickSettings._system?.quickSettingsItems[0].menu
-    this.proxy = Manager(
-      Gio.DBus.system,
-      'org.freedesktop.login1',
-      '/org/freedesktop/login1'
-    )
+    /* ------------------------------------------------------------------ */
+    /* Extension life cycle                                                */
+    /* ------------------------------------------------------------------ */
 
-    this.RestartToWindowsItem = new PopupMenu.PopupMenuItem(`${_('Restart to Windows')}...`)
+    enable() {
+        this._attach();
+    }
 
-    this.RestartToWindowsItem.connect('activate', () => {
-      this.counter = 60 // Changed from 5 to 60 seconds
+    disable() {
+        this._removeAttachTimeout();
+        this._destroyDialog();
+        this._menuItem?.destroy();
+        this._menuItem = null;
+        this._menu = null;
+    }
 
-      const dialog = this._buildDialog()
-      dialog.open()
+    /* ------------------------------------------------------------------ */
+    /* Menu item                                                           */
+    /* ------------------------------------------------------------------ */
 
-      this.counterIntervalId = setInterval(() => {
-        if (this.counter > 0) {
-          this.counter--
-        } else {
-          this._clearIntervals()
-          this._reboot()  // Changed from _Restart to _reboot
+    _attach() {
+        const quickSettings = Main.panel?.statusArea?.quickSettings;
+        if (!quickSettings && this._attachRetries-- > 0) {
+            // The panel is not built yet, try again once the main loop is idle.
+            this._removeAttachTimeout();
+            this._attachSourceId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                this._attachSourceId = 0;
+                this._attach();
+                return GLib.SOURCE_REMOVE;
+            });
+            return;
         }
-      }, 1000)
-    })
+        this._attachRetries = ATTACH_RETRIES;
 
-    this.menu.addMenuItem(this.RestartToWindowsItem, 2)
-  }
+        if (!quickSettings) {
+            Log('gave up waiting for the quick settings');
+            return;
+        }
 
-  async _reboot () {  // Changed from _Restart to _reboot
-    try {
-      console.log('Starting reboot process...')
-      const entryNum = await EFIBootManager.findWindowsBootManager()
-      console.log(`Found Windows Boot Manager entry: ${entryNum}`)
+        const menu = this._findSystemMenu(quickSettings);
+        if (menu === null) {
+            Log('could not find the system menu in the quick settings');
+            return;
+        }
 
-      if (!entryNum) {
-        throw new Error('Windows Boot Manager entry not found')
-      }
+        this._menu = menu;
+        this._menuItem = new PopupMenu.PopupMenuItem(_('Restart to Windows…'));
+        this._menuItem.connect('activate', () => {
+            this._onMenuItemActivated().catch(error => {
+                logError(error, 'RestartToWindows: unexpected failure');
+                Main.notifyError(
+                    _('Restart to Windows'),
+                    `${_('Failed to restart to Windows.')} ${error.message}`);
+            });
+        });
 
-      const success = await EFIBootManager.setNextBoot(entryNum)
-      if (success) {
-        console.log('Initiating reboot...')
-        // Create new proxy for each reboot attempt
-        const proxy = new Gio.DBusProxy.new_for_bus_sync(
-          Gio.BusType.SYSTEM,
-          Gio.DBusProxyFlags.NONE,
-          null,
-          'org.freedesktop.login1',
-          '/org/freedesktop/login1',
-          'org.freedesktop.login1.Manager',
-          null
-        );
+        // Put it next to "Restart…" and "Power Off…", i.e. right before the
+        // separator that GNOME puts above "Log Out…".
+        const items = menu._getMenuItems?.() ?? [];
+        const separatorIndex =
+            items.findIndex(item => item instanceof PopupMenu.PopupSeparatorMenuItem);
+        if (separatorIndex >= 0)
+            menu.addMenuItem(this._menuItem, separatorIndex);
+        else
+            menu.addMenuItem(this._menuItem);
 
-        proxy.call_sync('Reboot', new GLib.Variant('(b)', [false]), 0, -1, null);
-      } else {
-        throw new Error('Failed to set next boot entry')
-      }
-    } catch (error) {
-      console.error(`Error during reboot: ${error}`)
-      Main.notifyError(_('Error'), _('Failed to restart to Windows'))
+        Log('menu item added to the system menu');
     }
-  }
 
-  _queueModifySystemItem () {
-    this.sourceId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-      if (!panel.statusArea.quickSettings._system) return GLib.SOURCE_CONTINUE
+    /**
+     * The system indicator's first quick settings item owns the menu that
+     * holds Suspend / Restart… / Power Off….
+     */
+    _findSystemMenu(quickSettings) {
+        const items = quickSettings._system?.quickSettingsItems ?? [];
+        for (const item of items) {
+            if (item?.menu)
+                return item.menu;
+        }
 
-      this._modifySystemItem()
-      return GLib.SOURCE_REMOVE
-    })
-  }
-
-  constructor (metadata) {
-    super(metadata)
-  }
-
-  enable () {
-    if (!panel.statusArea.quickSettings._system) {
-      this._queueModifySystemItem()
-    } else {
-      this._modifySystemItem()
+        return null;
     }
-  }
 
-  disable () {
-    this._clearIntervals()
-    this.RestartToWindowsItem?.destroy()
-    this.RestartToWindowsItem = null
-    this.proxy = null
-    if (this.sourceId) {
-      GLib.Source.remove(this.sourceId)
-      this.sourceId = null
+    _removeAttachTimeout() {
+        if (this._attachSourceId) {
+            GLib.Source.remove(this._attachSourceId);
+            this._attachSourceId = 0;
+        }
     }
-  }
 
-  _buildDialog () {
-    const dialog = new ModalDialog.ModalDialog({ styleClass: 'modal-dialog' })
-    dialog.setButtons([
-      {
-        label: _('Cancel'),
-        action: () => {
-          this._clearIntervals()
-          dialog.close()
-        },
-        key: Clutter.KEY_Escape,
-        default: false
-      },
-      {
-        label: _('Restart'),
-        action: () => {
-          this._clearIntervals()
-          dialog.close()
-          this._reboot()
-        },
-        default: false
-      }
-    ])
+    /* ------------------------------------------------------------------ */
+    /* Confirmation dialog                                                 */
+    /* ------------------------------------------------------------------ */
 
-    const dialogTitle = new St.Label({
-      text: _('Restart to Windows'),
-      style: 'font-weight: bold;font-size:18px'
-    })
+    async _onMenuItemActivated() {
+        if (this._dialog !== null)
+            return;
 
-    let dialogMessage = new St.Label({
-      text: this._getDialogMessageText()
-    })
-    dialogMessage.clutter_text.ellipsize = Pango.EllipsizeMode.NONE
-    dialogMessage.clutter_text.line_wrap = true
+        Main.panel?.closeQuickSettings();
 
-    const titleBox = new St.BoxLayout({
-      x_align: Clutter.ActorAlign.CENTER
-    })
-    titleBox.add_child(new St.Label({ text: '  ' }))
-    titleBox.add_child(dialogTitle)
+        if (!EFIBootManager.isAvailable()) {
+            Main.notifyError(
+                _('Restart to Windows'),
+                _('efibootmgr is required by this extension. Please install it and try again.'));
+            return;
+        }
 
-    let box = new St.BoxLayout({ y_expand: true, vertical: true })
-    box.add_child(titleBox)
-    box.add_child(new St.Label({ text: '  ' }))
-    box.add_child(dialogMessage)
-
-    this.messageIntervalId = setInterval(() => {
-      dialogMessage?.set_text(this._getDialogMessageText())
-    }, 500)
-
-    dialog.contentLayout.add_child(box)
-
-    return dialog
-  }
-
-  _getDialogMessageText () {
-    return _(`The system will restart to Windows in %d seconds.`).replace(
-      '%d',
-      this.counter
-    )
-  }
-
-  _clearIntervals () {
-    clearInterval(this.counterIntervalId)
-    clearInterval(this.messageIntervalId)
-  }
-}
-
-function _getWindowsTitle (grubConfig) {
-  const lines = grubConfig.split('\n')
-
-  const windowsLine = lines.find(line => line.toLowerCase().includes('windows'))
-
-  if (!windowsLine) {
-    return null
-  }
-  const match = windowsLine.match(/'([^']+)'/)
-  return match ? match[1] : null
-}
-
-/**
- * Execute a command asynchronously and check the exit status.
- *
- * If given, @cancellable can be used to stop the process before it finishes.
- *
- * @param {string[]} argv - a list of string arguments
- * @param {Gio.Cancellable} [cancellable] - optional cancellable object
- * @returns {Promise<boolean>} - The process success
- */
-async function execCheck (argv) {
-  try {
-    const proc = Gio.Subprocess.new(
-      argv,
-      Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
-    )
-
-    return new Promise((resolve, reject) => {
-      proc.communicate_utf8_async(null, null, (proc, result) => {
+        let entry;
         try {
-          const [, stdout, stderr] = proc.communicate_utf8_finish(result)
-          const status = proc.get_exit_status()
-
-          if (status === 0) {
-            console.log('Command executed successfully')
-            resolve(true)
-          } else {
-            console.log(`Command failed: ${stderr}`)
-            reject(new Error(`Command failed with status ${status}: ${stderr}`))
-          }
+            entry = await EFIBootManager.findWindowsBootManager();
         } catch (error) {
-          reject(error)
+            logError(error, 'RestartToWindows: could not read the UEFI boot entries');
+            Main.notifyError(
+                _('Restart to Windows'),
+                `${_('Failed to restart to Windows.')} ${error.message}`);
+            return;
         }
-      })
-    })
-  } catch (error) {
-    console.log(`Error executing command: ${error}`)
-    throw error
-  }
+
+        if (entry === null) {
+            Main.notifyError(
+                _('Restart to Windows'),
+                _('Could not find the Windows Boot Manager entry in the UEFI boot entries. Is this a dual-boot system?'));
+            return;
+        }
+
+        this._entry = entry;
+        this._startCountdown();
+        this._dialog = this._buildDialog();
+        this._dialog.connect('closed', () => {
+            this._dialog = null;
+            this._countdownLabel = null;
+            this._stopCountdown();
+        });
+        this._dialog.open();
+    }
+
+    _buildDialog() {
+        const dialog = new ModalDialog.ModalDialog();
+
+        dialog.setButtons([
+            {
+                label: _('Cancel'),
+                action: () => this._destroyDialog(),
+                key: Clutter.KEY_Escape,
+            },
+            {
+                label: _('Restart'),
+                action: () => {
+                    this._destroyDialog();
+                    this._reboot();
+                },
+            },
+            // NOTE: no default button on purpose, so that a stray Enter cannot
+            // reboot into Windows without the countdown having been seen.
+        ]);
+
+        // `message-dialog-title` and `message-dialog-description` already
+        // centre their text, so no alignment enum is needed here. That is
+        // deliberate: Clutter.ActorAlign was renamed in some versions and
+        // Clutter.ActorAlignment does not exist at all on GNOME 50.
+        const titleLabel = new St.Label({
+            text: _('Restart to Windows'),
+            style_class: 'message-dialog-title',
+        });
+        titleLabel.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
+
+        this._countdownLabel = new St.Label({
+            text: this._countdownText(),
+            style_class: 'message-dialog-description',
+        });
+        this._countdownLabel.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
+        this._countdownLabel.clutter_text.line_wrap = true;
+
+        const content = new St.BoxLayout({
+            style_class: 'message-dialog-content',
+            // NOTE: St widgets dropped the `vertical` property in GNOME 51,
+            // `orientation` has to be used instead.
+            orientation: Clutter.Orientation.VERTICAL,
+        });
+        content.add_child(titleLabel);
+        content.add_child(this._countdownLabel);
+
+        dialog.contentLayout.add_child(content);
+
+        return dialog;
+    }
+
+    _countdownText() {
+        return _('The system will restart to Windows in %d seconds.').replace(
+            '%d', this._countdown);
+    }
+
+    /**
+     * The remaining seconds are derived from a deadline rather than counted
+     * down, so a tick that arrives late (or is coalesced) cannot make the
+     * countdown drift.
+     */
+    _tickCountdown() {
+        this._countdown = Math.max(
+            0, Math.ceil((this._deadline - GLib.get_monotonic_time()) / GLib.USEC_PER_SEC));
+        return this._countdown;
+    }
+
+    _startCountdown() {
+        this._deadline = GLib.get_monotonic_time() +
+            COUNTDOWN_SECONDS * GLib.USEC_PER_SEC;
+        this._tickCountdown();
+
+        this._labelSourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, () => {
+            this._countdownLabel?.set_text(this._countdownText());
+            return GLib.SOURCE_CONTINUE;
+        });
+
+        this._countdownSourceId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 1, () => {
+            this._countdownSourceId = 0;
+            if (this._tickCountdown() > 0)
+                return GLib.SOURCE_CONTINUE;
+
+            this._destroyDialog();
+            this._reboot();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _stopCountdown() {
+        for (const id of [this._countdownSourceId, this._labelSourceId]) {
+            if (id)
+                GLib.Source.remove(id);
+        }
+        this._countdownSourceId = 0;
+        this._labelSourceId = 0;
+    }
+
+    _destroyDialog() {
+        this._stopCountdown();
+
+        const dialog = this._dialog;
+        this._dialog = null;
+        this._countdownLabel = null;
+
+        dialog?.close();
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Restarting                                                          */
+    /* ------------------------------------------------------------------ */
+
+    async _reboot() {
+        try {
+            const entry = this._entry ?? await EFIBootManager.findWindowsBootManager();
+            if (entry === null)
+                throw new Error('no Windows boot entry found');
+
+            if (EFIBootManager.findHelper() === null)
+                this._showPasswordlessHint();
+
+            const result = await EFIBootManager.setNextBoot(entry);
+            Log(`next boot set to ${entry.id} (${entry.label}) via ${result.method}`);
+
+            await Logind.reboot();
+        } catch (error) {
+            if (error instanceof AuthenticationCancelledError) {
+                Log('authentication was cancelled, not restarting');
+                return;
+            }
+
+            logError(error, 'RestartToWindows: failed to restart to Windows');
+            Main.notifyError(
+                _('Restart to Windows'),
+                `${_('Failed to restart to Windows.')} ${error.message}`);
+        }
+    }
+
+    _showPasswordlessHint() {
+        if (this._passwordlessHintShown)
+            return;
+        this._passwordlessHintShown = true;
+
+        Main.notify(
+            _('Restart to Windows'),
+            _('Run the bundled setup-passwordless.sh script as root once to restart to Windows without being asked for a password.'));
+    }
 }

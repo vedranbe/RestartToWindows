@@ -37,3 +37,18 @@ msgstr "O sistema será reiniciado para o Windows em %d segundos."
 
 msgid "Restarting..."
 msgstr "Reiniciando..."
+
+msgid "Restart to Windows…"
+msgstr "Reiniciar para Windows…"
+
+msgid "efibootmgr is required by this extension. Please install it and try again."
+msgstr "Esta extensão requer o efibootmgr. Instale-o e tente novamente."
+
+msgid "Failed to restart to Windows."
+msgstr "Falha ao reiniciar para o Windows."
+
+msgid "Could not find the Windows Boot Manager entry in the UEFI boot entries. Is this a dual-boot system?"
+msgstr "Não foi encontrada a entrada Windows Boot Manager nas entradas de inicialização UEFI. Este é um sistema de inicialização dupla?"
+
+msgid "Run the bundled setup-passwordless.sh script as root once to restart to Windows without being asked for a password."
+msgstr "Execute uma vez o script setup-passwordless.sh incluído como root para reiniciar no Windows sem que a senha seja solicitada."

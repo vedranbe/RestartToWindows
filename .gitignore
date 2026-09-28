@@ -7,3 +7,6 @@ src/locale/
 
 # Extension zip file
 RestartToWindows@vedranbe.github.com.zip
+
+# Test scratch
+/tests/*.log

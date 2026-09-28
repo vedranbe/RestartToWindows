@@ -37,3 +37,18 @@ msgstr "Riavvia il computer in Windows"
 
 msgid "Failed"
 msgstr "Fallito"
+
+msgid "Restart to Windows…"
+msgstr "Riavvia in Windows…"
+
+msgid "efibootmgr is required by this extension. Please install it and try again."
+msgstr "Questa estensione richiede efibootmgr. Installalo e riprova."
+
+msgid "Failed to restart to Windows."
+msgstr "Riavvio in Windows non riuscito."
+
+msgid "Could not find the Windows Boot Manager entry in the UEFI boot entries. Is this a dual-boot system?"
+msgstr "Impossibile trovare la voce Windows Boot Manager nelle voci di avvio UEFI. Questo è un sistema con avvio doppio?"
+
+msgid "Run the bundled setup-passwordless.sh script as root once to restart to Windows without being asked for a password."
+msgstr "Esegui una volta lo script setup-passwordless.sh incluso come root per riavviare in Windows senza che ti venga chiesta la password."

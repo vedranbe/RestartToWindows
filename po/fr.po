@@ -37,3 +37,18 @@ msgstr "Redémarrage en cours..."
 
 msgid "The system will restart to Windows in %d seconds."
 msgstr "Le système redémarrera sous Windows dans %d secondes."
+
+msgid "Restart to Windows…"
+msgstr "Redémarrer sous Windows…"
+
+msgid "efibootmgr is required by this extension. Please install it and try again."
+msgstr "Cette extension nécessite efibootmgr. Veuillez l’installer puis réessayer."
+
+msgid "Failed to restart to Windows."
+msgstr "Échec du redémarrage sous Windows."
+
+msgid "Could not find the Windows Boot Manager entry in the UEFI boot entries. Is this a dual-boot system?"
+msgstr "Entrée « Windows Boot Manager » introuvable dans les entrées de démarrage UEFI. S’agit-il d’un système à double démarrage ?"
+
+msgid "Run the bundled setup-passwordless.sh script as root once to restart to Windows without being asked for a password."
+msgstr "Exécutez une fois le script setup-passwordless.sh fourni en tant que root pour redémarrer sous Windows sans mot de passe."

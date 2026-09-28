@@ -37,3 +37,18 @@ msgstr "Систем ће се поново покренути у Windows за %
 
 msgid "Restarting..."
 msgstr "Поново покретање..."
+
+msgid "Restart to Windows…"
+msgstr "Поново покрени у Windows…"
+
+msgid "efibootmgr is required by this extension. Please install it and try again."
+msgstr "Ова екстензија захтева efibootmgr. Инсталирајте га и покушајте поново."
+
+msgid "Failed to restart to Windows."
+msgstr "Поново покретање у Windows није успело."
+
+msgid "Could not find the Windows Boot Manager entry in the UEFI boot entries. Is this a dual-boot system?"
+msgstr "Ставка Windows Boot Manager није пронађена међу UEFI ставкама покретања. Да ли је ово систем са дуалним покретањем?"
+
+msgid "Run the bundled setup-passwordless.sh script as root once to restart to Windows without being asked for a password."
+msgstr "Једном покрените приложену скрипту setup-passwordless.sh као root да би се рачунало поново покренуло у Windows без упита за лозинку."

@@ -1,0 +1,69 @@
+#!/bin/sh
+# restart-to-windows - privileged helper for the "Restart To Windows" GNOME
+# extension.
+#
+# It sets the UEFI "BootNext" variable to an existing boot entry, and does
+# nothing else. The extension then asks systemd-logind to reboot, which does
+# not need any privileges at all.
+#
+# This file must stay owned by root and must not be writable by anyone else.
+# It is installed by "setup-passwordless.sh", together with a polkit rule that
+# authorises exactly this program for the active local session.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+set -eu
+
+PROGRAM=${0##*/}
+
+# Exit codes of pkexec(1), used by the caller to tell the failure modes apart.
+EXIT_USAGE=2
+EXIT_NO_EFIBOOTMGR=3
+EXIT_NO_SUCH_ENTRY=4
+
+die() {
+    printf '%s: %s\n' "$PROGRAM" "$1" >&2
+    exit "${2:-1}"
+}
+
+# Only a single, well formed EFI boot entry id is accepted. Nothing else about
+# the caller is trusted, and no other efibootmgr option is ever passed on.
+if [ "$#" -ne 1 ]; then
+    die "usage: $PROGRAM <EFI boot entry id>" "$EXIT_USAGE"
+fi
+
+case $1 in
+    *[!0-9A-Fa-f]* | '') die "'$1' is not a valid EFI boot entry id" "$EXIT_USAGE" ;;
+esac
+
+# efibootmgr always prints four digit, zero padded ids.
+while [ ${#1} -lt 4 ]; do
+    set -- "0$1"
+done
+if [ ${#1} -ne 4 ]; then
+    die "'$1' is not a valid EFI boot entry id" "$EXIT_USAGE"
+fi
+ENTRY_ID=$(printf '%s' "$1" | tr 'a-f' 'A-F')
+
+EFIBOOTMGR=
+for dir in /usr/bin /usr/sbin /bin /sbin /usr/local/bin /usr/local/sbin; do
+    if [ -x "$dir/efibootmgr" ]; then
+        EFIBOOTMGR="$dir/efibootmgr"
+        break
+    fi
+done
+
+if [ -z "$EFIBOOTMGR" ]; then
+    die "efibootmgr was not found on this system" "$EXIT_NO_EFIBOOTMGR"
+fi
+
+# Never trust the id blindly: make sure the entry still exists. Setting the
+# next boot entry of an entry that is not there would silently do nothing and
+# leave the user staring at a normal Linux boot.
+if ! "$EFIBOOTMGR" -v | grep -q "^Boot${ENTRY_ID}[*[:space:]]"; then
+    die "EFI boot entry ${ENTRY_ID} does not exist" "$EXIT_NO_SUCH_ENTRY"
+fi
+
+# Only BootNext is ever touched; this is a one-shot, the firmware forgets it
+# after the next boot.
+exec "$EFIBOOTMGR" -n "$ENTRY_ID"
