@@ -1,5 +1,5 @@
 {
-  "description": "Restart system into Windows",
+  "description": "Restart your system into Windows with or without password",
   "gettext-domain": "RestartToWindows@vedranbe.github.com",
   "license": "GPL-3.0-or-later",
   "name": "Restart To Windows",
