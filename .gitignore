@@ -1,4 +1,3 @@
-
 # Distribution folder
 dist/
 
@@ -10,3 +9,6 @@ RestartToWindows@vedranbe.github.com.zip
 
 # Test scratch
 /tests/*.log
+
+# Python virtualenv used by tooling such as shexli
+venv/

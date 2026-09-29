@@ -45,6 +45,10 @@ export default class RestartToWindowsExtension extends Extension {
     _menuItem = null;
     /** @type {ModalDialog.ModalDialog|null} */
     _dialog = null;
+    /** @type {number} */
+    _menuItemHandlerId = 0;
+    /** @type {number} */
+    _dialogClosedHandlerId = 0;
     _attachSourceId = 0;
     _attachRetries = ATTACH_RETRIES;
     _bootNextWatchdogId = 0;
@@ -66,10 +70,21 @@ export default class RestartToWindowsExtension extends Extension {
         this._removeAttachTimeout();
         this._removeBootNextWatchdog();
         this._destroyDialog();
-        this._menuItem?.destroy();
-        this._menuItem = null;
+        this._disconnectMenuItem();
         this._menu = null;
         this._restarting = false;
+    }
+
+    _disconnectMenuItem() {
+        // Disconnect before destroying. The item is destroyed right after, which
+        // would drop the handler anyway, but doing it explicitly is what the EGO
+        // review guidelines ask for and it keeps the pairing obvious.
+        if (this._menuItem && this._menuItemHandlerId)
+            this._menuItem.disconnect(this._menuItemHandlerId);
+
+        this._menuItemHandlerId = 0;
+        this._menuItem?.destroy();
+        this._menuItem = null;
     }
 
     /* ------------------------------------------------------------------ */
@@ -103,7 +118,8 @@ export default class RestartToWindowsExtension extends Extension {
 
         this._menu = menu;
         this._menuItem = new PopupMenu.PopupMenuItem(_('Restart to Windows…'));
-        this._menuItem.connect('activate', () => this._onMenuItemActivated());
+        this._menuItemHandlerId = this._menuItem.connect(
+            'activate', () => this._onMenuItemActivated());
 
         // Put it next to "Restart…" and "Power Off…", i.e. right before the
         // separator that GNOME puts above "Log Out…".
@@ -164,13 +180,13 @@ export default class RestartToWindowsExtension extends Extension {
         dialog.setButtons([
             {
                 label: _('Cancel'),
-                action: () => this._destroyDialog(),
+                action: () => this._cancelDialog(),
                 key: Clutter.KEY_Escape,
             },
             {
                 label: _('Restart'),
                 action: () => {
-                    this._destroyDialog();
+                    this._closeDialog();
                     this._restart();
                 },
             },
@@ -199,18 +215,42 @@ export default class RestartToWindowsExtension extends Extension {
         dialog.contentLayout.add_child(content);
 
         this._dialog = dialog;
-        dialog.connect('closed', () => {
+        // Backstop for the dialog going away without going through our buttons.
+        this._dialogClosedHandlerId = dialog.connect('closed', () => {
+            this._dialogClosedHandlerId = 0;
             this._dialog = null;
-            // Cancelled before anything was armed.
+            // Nothing was armed yet, so this is inert.
             this._restarting = false;
         });
         dialog.open();
     }
 
+    /** Dismissed before anything was armed. */
+    _cancelDialog() {
+        this._restarting = false;
+        this._destroyDialog();
+    }
+
+    /** Closed on the way into a restart, which keeps the guard armed. */
+    _closeDialog() {
+        this._destroyDialog();
+    }
+
     _destroyDialog() {
         const dialog = this._dialog;
         this._dialog = null;
-        dialog?.close();
+
+        if (!dialog)
+            return;
+
+        if (this._dialogClosedHandlerId) {
+            dialog.disconnect(this._dialogClosedHandlerId);
+            this._dialogClosedHandlerId = 0;
+        }
+
+        // ModalDialog has destroyOnClose: true, so this tears the actor down and
+        // drops the button handlers with it.
+        dialog.close();
     }
 
     /* ------------------------------------------------------------------ */
@@ -218,6 +258,12 @@ export default class RestartToWindowsExtension extends Extension {
     /* ------------------------------------------------------------------ */
 
     async _restart() {
+        // The guard set when the dialog opened stays up for the whole restart, so
+        // a second click cannot start another one. It is released here for every
+        // outcome except an actual reboot, and a plain `return` from inside the
+        // try block still counts as "not rebooting".
+        let rebooting = false;
+
         try {
             if (!EFIBootManager.isAvailable()) {
                 Main.notifyError(
@@ -249,9 +295,8 @@ export default class RestartToWindowsExtension extends Extension {
             // countdown and will reboot by itself when that runs out. Resolves
             // once the user answered it, throws RebootCancelledError on Cancel.
             await Reboot.now();
+            rebooting = true;
         } catch (error) {
-            this._restarting = false;
-
             if (error instanceof RebootCancelledError ||
                 error instanceof AuthenticationCancelledError) {
                 Log('the restart was cancelled, undoing the pending boot entry');
@@ -263,6 +308,9 @@ export default class RestartToWindowsExtension extends Extension {
             Main.notifyError(
                 _('Restart to Windows'),
                 `${_('Failed to restart to Windows.')} ${error.message}`);
+        } finally {
+            if (!rebooting)
+                this._restarting = false;
         }
     }
 
