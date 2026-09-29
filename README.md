@@ -17,7 +17,7 @@ Windows.
 
 - Linux with a UEFI firmware (this is what makes `BootNext` possible)
 - A dual-boot setup with Windows installed under the Microsoft Boot Manager
-- GNOME Shell 46 – 51
+- GNOME Shell 46 – 50
 - `efibootmgr` (from the distribution's repositories, e.g.
   `sudo dnf install efibootmgr`)
 
