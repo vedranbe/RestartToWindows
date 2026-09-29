@@ -16,17 +16,27 @@ import {
     gettext as _,
 } from 'resource:///org/gnome/shell/extensions/extension.js';
 
+import {RebootCancelledError} from './cancel.js';
 import {
     AuthenticationCancelledError,
     EFIBootManager,
 } from './efibootmgr.js';
-import {Logind} from './logind.js';
+import {Reboot} from './reboot.js';
 import {Log} from './utils.js';
-
-const COUNTDOWN_SECONDS = 60;
 
 /* How often to retry attaching the menu item while the panel is not up yet. */
 const ATTACH_RETRIES = 50;
+
+/**
+ * Backstop for a cancelled restart.
+ *
+ * The confirmation is GNOME's own "Restart" dialog, and cancelling it comes back
+ * to us so the BootNext can be taken off again straight away. If the shell dies
+ * before that, or the undo itself fails, the machine is still up this long after
+ * we asked for a reboot, which means nothing happened, so clean up here. If the
+ * reboot really happens this timer simply dies with the shell.
+ */
+const BOOTNEXT_WATCHDOG_SECONDS = 5 * 60;
 
 export default class RestartToWindowsExtension extends Extension {
     /** @type {import('../ui/popupMenu.js').PopupMenu|null} */
@@ -35,18 +45,14 @@ export default class RestartToWindowsExtension extends Extension {
     _menuItem = null;
     /** @type {ModalDialog.ModalDialog|null} */
     _dialog = null;
-    /** @type {St.Label|null} */
-    _countdownLabel = null;
-    /** @type {number} */
-    _countdown = 0;
-    _deadline = 0;
-    _countdownSourceId = 0;
-    _labelSourceId = 0;
     _attachSourceId = 0;
     _attachRetries = ATTACH_RETRIES;
+    _bootNextWatchdogId = 0;
     _passwordlessHintShown = false;
-    /** @type {import('./efibootmgr.js').BootEntry|null} */
-    _entry = null;
+    /** Set synchronously, so a double click cannot start two restarts. */
+    _restarting = false;
+    /** @type {string|null} the BootNext that was set before we touched it */
+    _previousBootNext = null;
 
     /* ------------------------------------------------------------------ */
     /* Extension life cycle                                                */
@@ -58,10 +64,12 @@ export default class RestartToWindowsExtension extends Extension {
 
     disable() {
         this._removeAttachTimeout();
+        this._removeBootNextWatchdog();
         this._destroyDialog();
         this._menuItem?.destroy();
         this._menuItem = null;
         this._menu = null;
+        this._restarting = false;
     }
 
     /* ------------------------------------------------------------------ */
@@ -95,14 +103,7 @@ export default class RestartToWindowsExtension extends Extension {
 
         this._menu = menu;
         this._menuItem = new PopupMenu.PopupMenuItem(_('Restart to Windows…'));
-        this._menuItem.connect('activate', () => {
-            this._onMenuItemActivated().catch(error => {
-                logError(error, 'RestartToWindows: unexpected failure');
-                Main.notifyError(
-                    _('Restart to Windows'),
-                    `${_('Failed to restart to Windows.')} ${error.message}`);
-            });
-        });
+        this._menuItem.connect('activate', () => this._onMenuItemActivated());
 
         // Put it next to "Restart…" and "Power Off…", i.e. right before the
         // separator that GNOME puts above "Log Out…".
@@ -139,54 +140,27 @@ export default class RestartToWindowsExtension extends Extension {
     }
 
     /* ------------------------------------------------------------------ */
-    /* Confirmation dialog                                                 */
+    /* Confirmation                                                        */
     /* ------------------------------------------------------------------ */
 
-    async _onMenuItemActivated() {
-        if (this._dialog !== null)
+    /**
+     * Nothing at all is armed yet at this point: no BootNext, no reboot
+     * request, no timer. Cancelling here is therefore completely inert.
+     *
+     * This dialog is deliberately a plain question with no countdown. A
+     * countdown that acts on its own is exactly the hazard this replaces: GNOME's
+     * own restart dialog auto-confirms when its timer runs out, which is why an
+     * earlier version of this extension could reboot the machine even after
+     * Cancel had been pressed.
+     */
+    _onMenuItemActivated() {
+        if (this._restarting || this._dialog !== null)
             return;
+        this._restarting = true;
 
         Main.panel?.closeQuickSettings();
 
-        if (!EFIBootManager.isAvailable()) {
-            Main.notifyError(
-                _('Restart to Windows'),
-                _('efibootmgr is required by this extension. Please install it and try again.'));
-            return;
-        }
-
-        let entry;
-        try {
-            entry = await EFIBootManager.findWindowsBootManager();
-        } catch (error) {
-            logError(error, 'RestartToWindows: could not read the UEFI boot entries');
-            Main.notifyError(
-                _('Restart to Windows'),
-                `${_('Failed to restart to Windows.')} ${error.message}`);
-            return;
-        }
-
-        if (entry === null) {
-            Main.notifyError(
-                _('Restart to Windows'),
-                _('Could not find the Windows Boot Manager entry in the UEFI boot entries. Is this a dual-boot system?'));
-            return;
-        }
-
-        this._entry = entry;
-        this._startCountdown();
-        this._dialog = this._buildDialog();
-        this._dialog.connect('closed', () => {
-            this._dialog = null;
-            this._countdownLabel = null;
-            this._stopCountdown();
-        });
-        this._dialog.open();
-    }
-
-    _buildDialog() {
         const dialog = new ModalDialog.ModalDialog();
-
         dialog.setButtons([
             {
                 label: _('Cancel'),
@@ -197,97 +171,45 @@ export default class RestartToWindowsExtension extends Extension {
                 label: _('Restart'),
                 action: () => {
                     this._destroyDialog();
-                    this._reboot();
+                    this._restart();
                 },
             },
-            // NOTE: no default button on purpose, so that a stray Enter cannot
-            // reboot into Windows without the countdown having been seen.
         ]);
 
-        // `message-dialog-title` and `message-dialog-description` already
-        // centre their text, so no alignment enum is needed here. That is
-        // deliberate: Clutter.ActorAlign was renamed in some versions and
-        // Clutter.ActorAlignment does not exist at all on GNOME 50.
-        const titleLabel = new St.Label({
+        const title = new St.Label({
             text: _('Restart to Windows'),
             style_class: 'message-dialog-title',
         });
-        titleLabel.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
+        title.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
 
-        this._countdownLabel = new St.Label({
-            text: this._countdownText(),
+        const description = new St.Label({
+            text: _('The computer will restart into Windows.'),
             style_class: 'message-dialog-description',
         });
-        this._countdownLabel.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
-        this._countdownLabel.clutter_text.line_wrap = true;
+        description.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
+        description.clutter_text.line_wrap = true;
 
         const content = new St.BoxLayout({
             style_class: 'message-dialog-content',
-            // NOTE: St widgets dropped the `vertical` property in GNOME 51,
-            // `orientation` has to be used instead.
+            // St dropped the `vertical` property in GNOME 51.
             orientation: Clutter.Orientation.VERTICAL,
         });
-        content.add_child(titleLabel);
-        content.add_child(this._countdownLabel);
-
+        content.add_child(title);
+        content.add_child(description);
         dialog.contentLayout.add_child(content);
 
-        return dialog;
-    }
-
-    _countdownText() {
-        return _('The system will restart to Windows in %d seconds.').replace(
-            '%d', this._countdown);
-    }
-
-    /**
-     * The remaining seconds are derived from a deadline rather than counted
-     * down, so a tick that arrives late (or is coalesced) cannot make the
-     * countdown drift.
-     */
-    _tickCountdown() {
-        this._countdown = Math.max(
-            0, Math.ceil((this._deadline - GLib.get_monotonic_time()) / GLib.USEC_PER_SEC));
-        return this._countdown;
-    }
-
-    _startCountdown() {
-        this._deadline = GLib.get_monotonic_time() +
-            COUNTDOWN_SECONDS * GLib.USEC_PER_SEC;
-        this._tickCountdown();
-
-        this._labelSourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, () => {
-            this._countdownLabel?.set_text(this._countdownText());
-            return GLib.SOURCE_CONTINUE;
+        this._dialog = dialog;
+        dialog.connect('closed', () => {
+            this._dialog = null;
+            // Cancelled before anything was armed.
+            this._restarting = false;
         });
-
-        this._countdownSourceId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 1, () => {
-            this._countdownSourceId = 0;
-            if (this._tickCountdown() > 0)
-                return GLib.SOURCE_CONTINUE;
-
-            this._destroyDialog();
-            this._reboot();
-            return GLib.SOURCE_REMOVE;
-        });
-    }
-
-    _stopCountdown() {
-        for (const id of [this._countdownSourceId, this._labelSourceId]) {
-            if (id)
-                GLib.Source.remove(id);
-        }
-        this._countdownSourceId = 0;
-        this._labelSourceId = 0;
+        dialog.open();
     }
 
     _destroyDialog() {
-        this._stopCountdown();
-
         const dialog = this._dialog;
         this._dialog = null;
-        this._countdownLabel = null;
-
         dialog?.close();
     }
 
@@ -295,22 +217,45 @@ export default class RestartToWindowsExtension extends Extension {
     /* Restarting                                                          */
     /* ------------------------------------------------------------------ */
 
-    async _reboot() {
+    async _restart() {
         try {
-            const entry = this._entry ?? await EFIBootManager.findWindowsBootManager();
-            if (entry === null)
-                throw new Error('no Windows boot entry found');
+            if (!EFIBootManager.isAvailable()) {
+                Main.notifyError(
+                    _('Restart to Windows'),
+                    _('efibootmgr is required by this extension. Please install it and try again.'));
+                return;
+            }
+
+            const entry = await EFIBootManager.findWindowsBootManager();
+            if (entry === null) {
+                Main.notifyError(
+                    _('Restart to Windows'),
+                    _('Could not find the Windows Boot Manager entry in the UEFI boot entries. Is this a dual-boot system?'));
+                return;
+            }
 
             if (EFIBootManager.findHelper() === null)
                 this._showPasswordlessHint();
 
+            // Remember what was there so a cancelled restart can put it back.
+            this._previousBootNext = await EFIBootManager.readBootNext();
+
             const result = await EFIBootManager.setNextBoot(entry);
             Log(`next boot set to ${entry.id} (${entry.label}) via ${result.method}`);
 
-            await Logind.reboot();
+            this._armBootNextWatchdog(this._previousBootNext);
+
+            // Puts up GNOME's own "Restart" confirmation, which carries a
+            // countdown and will reboot by itself when that runs out. Resolves
+            // once the user answered it, throws RebootCancelledError on Cancel.
+            await Reboot.now();
         } catch (error) {
-            if (error instanceof AuthenticationCancelledError) {
-                Log('authentication was cancelled, not restarting');
+            this._restarting = false;
+
+            if (error instanceof RebootCancelledError ||
+                error instanceof AuthenticationCancelledError) {
+                Log('the restart was cancelled, undoing the pending boot entry');
+                this._undoBootNext(this._previousBootNext);
                 return;
             }
 
@@ -318,6 +263,62 @@ export default class RestartToWindowsExtension extends Extension {
             Main.notifyError(
                 _('Restart to Windows'),
                 `${_('Failed to restart to Windows.')} ${error.message}`);
+        }
+    }
+
+    /**
+     * Put our BootNext back the way we found it.
+     *
+     * BootNext is a one-shot that the firmware only forgets after an actual
+     * boot, so leaving it behind would send the next, unrelated reboot to
+     * Windows as well.
+     */
+    async _undoBootNext(previous) {
+        this._removeBootNextWatchdog();
+
+        try {
+            const current = await EFIBootManager.readBootNext();
+            if (current === null) {
+                Log('the pending boot entry was already cleared, nothing to undo');
+                return;
+            }
+
+            if (previous !== null) {
+                // Restore what was there before us rather than clearing a value
+                // we did not set.
+                const entries = await EFIBootManager.listEntries();
+                const original = entries.find(entry => entry.id === previous);
+                if (original) {
+                    await EFIBootManager.setNextBoot(original);
+                    Log(`restored the pending boot entry to ${original.id} (${original.label})`);
+                    return;
+                }
+            }
+
+            await EFIBootManager.clearBootNext();
+            Log('cleared the pending boot entry after a cancelled restart');
+        } catch (error) {
+            logError(error, 'RestartToWindows: could not clear the pending boot entry');
+            Main.notifyError(
+                _('Restart to Windows'),
+                `${_('The pending Windows boot entry could not be cleared, so the next restart may still go to Windows.')} ${error.message}`);
+        }
+    }
+
+    _armBootNextWatchdog(previous) {
+        this._removeBootNextWatchdog();
+        this._bootNextWatchdogId = GLib.timeout_add_seconds(
+            GLib.PRIORITY_DEFAULT, BOOTNEXT_WATCHDOG_SECONDS, () => {
+                this._bootNextWatchdogId = 0;
+                this._undoBootNext(previous);
+                return GLib.SOURCE_REMOVE;
+            });
+    }
+
+    _removeBootNextWatchdog() {
+        if (this._bootNextWatchdogId !== 0) {
+            GLib.Source.remove(this._bootNextWatchdogId);
+            this._bootNextWatchdogId = 0;
         }
     }
 

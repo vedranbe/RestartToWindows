@@ -52,3 +52,9 @@ msgstr "No se encontró la entrada «Windows Boot Manager» en las entradas de a
 
 msgid "Run the bundled setup-passwordless.sh script as root once to restart to Windows without being asked for a password."
 msgstr "Ejecute una vez el script setup-passwordless.sh incluido como root para reiniciar en Windows sin que se le pida la contraseña."
+
+msgid "The pending Windows boot entry could not be cleared, so the next restart may still go to Windows."
+msgstr "No se pudo borrar la entrada de arranque pendiente de Windows, por lo que el próximo reinicio podría iniciar Windows igualmente."
+
+msgid "The computer will restart into Windows."
+msgstr "El equipo se reiniciará y arrancará con Windows."

@@ -11,7 +11,7 @@
  *  2. `pkexec efibootmgr -n <id>`, the old behaviour. This always works but
  *     asks for a password.
  *
- * The actual reboot is left to systemd-logind, see logind.js.
+ * The actual reboot is left to gnome-session, see reboot.js.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -39,6 +39,9 @@ const HELPER_PATHS = [
 ];
 
 const WINDOWS_BOOT_MANAGER = 'Windows Boot Manager';
+
+/* Argument understood by the helper: delete BootNext instead of setting it. */
+const CLEAR_BOOT_NEXT = 'none';
 
 /* pkexec exit codes, see pkexec(1). */
 const EXIT_AUTH_DISMISSED = 126;
@@ -103,8 +106,12 @@ export class EFIBootManager {
         return entries;
     }
 
-    /** Read the UEFI boot entries. Reading does not need any privileges. */
-    static async listEntries() {
+    /**
+     * Read the raw `efibootmgr -v` output. Reading needs no privileges.
+     *
+     * @returns {Promise<string>}
+     */
+    static async _readOutput() {
         const binary = this.findEfiBootMgr();
         if (binary === null)
             throw new Error('efibootmgr is not installed');
@@ -113,7 +120,25 @@ export class EFIBootManager {
         if (status !== 0)
             throw new Error(`efibootmgr -v failed: ${stderr.trim() || status}`);
 
-        return this._parseEntries(stdout);
+        return stdout;
+    }
+
+    /** @returns {Promise<BootEntry[]>} */
+    static async listEntries() {
+        return this._parseEntries(await this._readOutput());
+    }
+
+    /**
+     * The boot entry the firmware is currently told to use next, if any.
+     *
+     * Worth knowing because BootNext survives a cancelled restart: it would
+     * then quietly hijack the next, unrelated reboot.
+     *
+     * @returns {Promise<string|null>} four hex digits, or null when unset
+     */
+    static async readBootNext() {
+        const match = /^BootNext:\s*([0-9A-Fa-f]{4})\s*$/m.exec(await this._readOutput());
+        return match ? match[1].toUpperCase() : null;
     }
 
     /**
@@ -134,21 +159,21 @@ export class EFIBootManager {
     }
 
     /**
-     * Make `entry` the target of the next boot by writing the UEFI `BootNext`
-     * variable. That needs root, so it goes through pkexec.
+     * Run the privileged helper (or efibootmgr as a fallback) with a single
+     * argument.
      *
-     * @param {BootEntry} entry
+     * @param {string} argument an EFI boot entry id, or CLEAR_BOOT_NEXT
      * @returns {Promise<{method: string, needsAuthentication: boolean}>}
      */
-    static async setNextBoot(entry) {
+    static async _runPrivileged(argument) {
         const pkexec = this.findPkexec();
 
         // Preferred: the dedicated helper, which polkit authorises for the
         // active session, so no password prompt shows up.
         const helper = this.findHelper();
         if (helper !== null) {
-            Log(`using the passwordless helper ${helper}`);
-            const [status, , stderr] = await ExecCommand([pkexec, helper, entry.id]);
+            Log(`using the passwordless helper ${helper} ${argument}`);
+            const [status, , stderr] = await ExecCommand([pkexec, helper, argument]);
             if (status === 0)
                 return {method: 'helper', needsAuthentication: false};
             if (status === EXIT_AUTH_DISMISSED)
@@ -164,8 +189,13 @@ export class EFIBootManager {
         if (binary === null)
             throw new Error('efibootmgr is not installed');
 
-        Log(`falling back to pkexec ${binary} -n ${entry.id}`);
-        const [status, , stderr] = await ExecCommand([pkexec, binary, '-n', entry.id]);
+        // efibootmgr spells "clear BootNext" differently from our helper.
+        const argv = argument === CLEAR_BOOT_NEXT
+            ? [pkexec, binary, '-N']
+            : [pkexec, binary, '-n', argument];
+
+        Log(`falling back to pkexec ${argv.slice(1).join(' ')}`);
+        const [status, , stderr] = await ExecCommand(argv);
         if (status === 0)
             return {method: 'pkexec', needsAuthentication: true};
         if (status === EXIT_AUTH_DISMISSED)
@@ -173,6 +203,30 @@ export class EFIBootManager {
         if (status === EXIT_AUTH_NOT_AUTHORIZED)
             throw new Error('not authorised to change the next boot entry');
 
-        throw new Error(`efibootmgr -n ${entry.id} failed: ${stderr.trim() || status}`);
+        throw new Error(`${argv.slice(1).join(' ')} failed: ${stderr.trim() || status}`);
+    }
+
+    /**
+     * Make `entry` the target of the next boot by writing the UEFI `BootNext`
+     * variable. That needs root, so it goes through pkexec.
+     *
+     * @param {BootEntry} entry
+     * @returns {Promise<{method: string, needsAuthentication: boolean}>}
+     */
+    static async setNextBoot(entry) {
+        return this._runPrivileged(entry.id);
+    }
+
+    /**
+     * Undo a previously set BootNext.
+     *
+     * BootNext is a one-shot that the firmware only forgets after a boot, so a
+     * cancelled restart would otherwise send the *next* unrelated reboot to
+     * Windows as well.
+     *
+     * @returns {Promise<{method: string, needsAuthentication: boolean}>}
+     */
+    static async clearBootNext() {
+        return this._runPrivileged(CLEAR_BOOT_NEXT);
     }
 }

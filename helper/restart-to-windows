@@ -2,13 +2,17 @@
 # restart-to-windows - privileged helper for the "Restart To Windows" GNOME
 # extension.
 #
-# It sets the UEFI "BootNext" variable to an existing boot entry, and does
-# nothing else. The extension then asks systemd-logind to reboot, which does
-# not need any privileges at all.
+# It sets the UEFI "BootNext" variable to an existing boot entry, or deletes it
+# again, and does nothing else. The extension then asks gnome-session to
+# reboot, which needs no privileges at all.
 #
 # This file must stay owned by root and must not be writable by anyone else.
 # It is installed by "setup-passwordless.sh", together with a polkit rule that
 # authorises exactly this program for the active local session.
+#
+# Usage:
+#   restart-to-windows <EFI boot entry id>   set BootNext to that entry
+#   restart-to-windows none                 delete BootNext again
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -26,10 +30,34 @@ die() {
     exit "${2:-1}"
 }
 
-# Only a single, well formed EFI boot entry id is accepted. Nothing else about
-# the caller is trusted, and no other efibootmgr option is ever passed on.
+# Exactly one, well formed argument is accepted. Nothing else about the caller
+# is trusted, and no other efibootmgr option is ever passed on.
 if [ "$#" -ne 1 ]; then
-    die "usage: $PROGRAM <EFI boot entry id>" "$EXIT_USAGE"
+    die "usage: $PROGRAM <EFI boot entry id>|none" "$EXIT_USAGE"
+fi
+
+EFIBOOTMGR=
+for dir in /usr/bin /usr/sbin /bin /sbin /usr/local/bin /usr/local/sbin; do
+    if [ -x "$dir/efibootmgr" ]; then
+        EFIBOOTMGR="$dir/efibootmgr"
+        break
+    fi
+done
+
+if [ -z "$EFIBOOTMGR" ]; then
+    die "efibootmgr was not found on this system" "$EXIT_NO_EFIBOOTMGR"
+fi
+
+# Undo a previously set BootNext. The restart is confirmed by a second
+# gnome-session dialog, which can be cancelled, and a left-over BootNext would
+# silently hijack the next, entirely unrelated reboot. The extension clears it
+# again when that happens.
+if [ "$1" = 'none' ]; then
+    # Not being set already is the state we want.
+    if ! "$EFIBOOTMGR" -v | grep -q '^BootNext:'; then
+        exit 0
+    fi
+    exec "$EFIBOOTMGR" -N
 fi
 
 case $1 in
@@ -44,18 +72,6 @@ if [ ${#1} -ne 4 ]; then
     die "'$1' is not a valid EFI boot entry id" "$EXIT_USAGE"
 fi
 ENTRY_ID=$(printf '%s' "$1" | tr 'a-f' 'A-F')
-
-EFIBOOTMGR=
-for dir in /usr/bin /usr/sbin /bin /sbin /usr/local/bin /usr/local/sbin; do
-    if [ -x "$dir/efibootmgr" ]; then
-        EFIBOOTMGR="$dir/efibootmgr"
-        break
-    fi
-done
-
-if [ -z "$EFIBOOTMGR" ]; then
-    die "efibootmgr was not found on this system" "$EXIT_NO_EFIBOOTMGR"
-fi
 
 # Never trust the id blindly: make sure the entry still exists. Setting the
 # next boot entry of an entry that is not there would silently do nothing and

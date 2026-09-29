@@ -1,39 +1,33 @@
 /* logind.js
  *
- * systemd-logind's reboot method, over the system bus.
+ * A very small client for systemd-logind's D-Bus API.
  *
- * polkit ships `allow_active: yes` for `org.freedesktop.login1.reboot`, so the
- * user sitting at the machine may reboot without authenticating. That is what
- * makes the second half of a restart to Windows password free. Verified on
- * systemd 259 / Fedora 44.
+ * NOTE: the constructor is `GLib.Variant`. `Gio.Variant` is only the GObject
+ * interface and is not constructible, so `new Gio.Variant('(b)', [false])`
+ * throws "Variant is not a constructor" at runtime.
  *
- * The call is made on the bare connection rather than through
- * `Gio.DBusProxy.makeProxyWrapper()` or a `Gio.DBusProxy` subclass: the former
- * was removed in GJS 1.88 (GNOME 50), and the proxy conveniences it used to
- * add (`RebootAsync()` and friends) went with it.
- *
- * Note that logind's `SetRebootToBootLoaderEntry()` is deliberately *not* used
- * as a shortcut here. systemd only accepts loader entry *file names* built
- * from alphanumerics and "+-_.@" (`efi_loader_entry_name_valid()`), so it
- * rejects "Windows Boot Manager" outright, and it additionally needs a boot
- * loader that advertises the `entry-oneshot` feature. Writing the UEFI
- * `BootNext` variable through a small authorised helper is the portable way.
+ * NOTE: `Gio.DBus.makeProxyWrapper()` is `undefined` these days, the wrapper
+ * lives at `Gio.DBusProxy.makeProxyWrapper()`. This module does not need it and
+ * uses the bare connection, which is the most stable option of the three.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 
 const BUS_NAME = 'org.freedesktop.login1';
 const OBJECT_PATH = '/org/freedesktop/login1';
 const INTERFACE = 'org.freedesktop.login1.Manager';
 
 /**
+ * Call a method on the logind manager over the system bus.
+ *
  * @param {string} method
  * @param {GLib.Variant|null} parameters
  * @returns {Promise<GLib.Variant>}
  */
-function call(method, parameters) {
+export function callMethod(method, parameters) {
     return new Promise((resolve, reject) => {
         Gio.DBus.system.call(
             BUS_NAME, OBJECT_PATH, INTERFACE, method,
@@ -49,11 +43,20 @@ function call(method, parameters) {
     });
 }
 
-export const Logind = class Logind {
-    /**
-     * Reboot now, without asking for a password.
-     */
-    static async reboot() {
-        await call('Reboot', new Gio.Variant('(b)', [false]));
-    }
-};
+/**
+ * Reboot by asking logind directly.
+ *
+ * polkit ships `allow_active: yes` for `org.freedesktop.login1.reboot`, but
+ * while a desktop session is running gnome-session holds a *strong block*
+ * inhibitor on `shutdown`. logind then adds `POLKIT_ALWAYS_QUERY` to its check
+ * of `org.freedesktop.login1.reboot-ignore-inhibit`, which is
+ * `allow_active: auth_admin_keep`, so this normally shows a password prompt.
+ *
+ * Prefer `Reboot.now()` from reboot.js, which goes through gnome-session
+ * instead. This is only the fallback for when there is no gnome-session.
+ *
+ * @returns {Promise<void>}
+ */
+export async function reboot() {
+    await callMethod('Reboot', new GLib.Variant('(b)', [false]));
+}

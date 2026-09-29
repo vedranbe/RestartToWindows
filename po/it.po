@@ -52,3 +52,9 @@ msgstr "Impossibile trovare la voce Windows Boot Manager nelle voci di avvio UEF
 
 msgid "Run the bundled setup-passwordless.sh script as root once to restart to Windows without being asked for a password."
 msgstr "Esegui una volta lo script setup-passwordless.sh incluso come root per riavviare in Windows senza che ti venga chiesta la password."
+
+msgid "The pending Windows boot entry could not be cleared, so the next restart may still go to Windows."
+msgstr "Non è stato possibile cancellare la voce di avvio di Windows in sospeso, quindi il prossimo riavvio potrebbe comunque avviare Windows."
+
+msgid "The computer will restart into Windows."
+msgstr "Il computer verrà riavviato e avvierà Windows."

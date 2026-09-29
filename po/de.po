@@ -53,3 +53,9 @@ msgstr "Der Eintrag „Windows Boot Manager“ wurde in den UEFI-Booteinträgen 
 
 msgid "Run the bundled setup-passwordless.sh script as root once to restart to Windows without being asked for a password."
 msgstr "Führen Sie das mitgelieferte Skript setup-passwordless.sh einmal als Root aus, um ohne Passwortabfrage zu Windows neu zu starten."
+
+msgid "The pending Windows boot entry could not be cleared, so the next restart may still go to Windows."
+msgstr "Die ausstehende Windows-Booteintrag konnte nicht gelöscht werden, der nächste Neustart startet daher möglicherweise trotzdem Windows."
+
+msgid "The computer will restart into Windows."
+msgstr "Der Computer wird neu gestartet und Windows gestartet."

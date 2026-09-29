@@ -52,3 +52,9 @@ msgstr "Stavka Windows Boot Manager nije pronađena među UEFI stavkama pokretan
 
 msgid "Run the bundled setup-passwordless.sh script as root once to restart to Windows without being asked for a password."
 msgstr "Jednom pokrenite priloženu skriptu setup-passwordless.sh kao root da bi se računalo ponovo pokrenulo u Windows bez upita za lozinku."
+
+msgid "The pending Windows boot entry could not be cleared, so the next restart may still go to Windows."
+msgstr "Zabiljena stavka pokretanja za Windows nije mogla biti obrisana, pa sljedeće ponovno pokretanje i dalje može pokrenuti Windows."
+
+msgid "The computer will restart into Windows."
+msgstr "Računalo će se ponovo pokrenuti i pokrenuti Windows."

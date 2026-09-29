@@ -52,3 +52,9 @@ msgstr "Entrée « Windows Boot Manager » introuvable dans les entrées de dém
 
 msgid "Run the bundled setup-passwordless.sh script as root once to restart to Windows without being asked for a password."
 msgstr "Exécutez une fois le script setup-passwordless.sh fourni en tant que root pour redémarrer sous Windows sans mot de passe."
+
+msgid "The pending Windows boot entry could not be cleared, so the next restart may still go to Windows."
+msgstr "L'entrée de démarrage Windows en attente n'a pas pu être supprimée, le prochain redémarrage lancera donc peut-être Windows quand même."
+
+msgid "The computer will restart into Windows."
+msgstr "L'ordinateur redémarrera sous Windows."
